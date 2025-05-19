@@ -73,3 +73,8 @@ async def analyze(data: AnalyzeRequest):
         "top_10_trending_texts": trending_texts,
         "suggestion_text": improvement_text
     }
+
+
+@app.get("/")
+async def root():
+    return {"message": "Seo analyzation API works!"}
