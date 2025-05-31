@@ -1,81 +1,28 @@
 import os
-import requests
-from fastapi import FastAPI
+import logging
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List
+import serpapi
+import re
 
-app = FastAPI()
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
+app = FastAPI(title="SEO Analyzation API", version="1.0.0")
+
+# Pydantic model for /analyze endpoint
 class AnalyzeRequest(BaseModel):
     topic: str
     keywords: List[str]
 
-def get_google_autocomplete_suggestions(query: str, max_results=10):
-    url = "http://suggestqueries.google.com/complete/search"
-    params = {'client': 'firefox', 'q': query}
-    try:
-        response = requests.get(url, params=params, timeout=5)
-        response.raise_for_status()
-        suggestions = response.json()[1]
-        return suggestions[:max_results]
-    except Exception:
-        return []
+# Pydantic model for /serpapi endpoint
+class SerpapiRequest(BaseModel):
+    topic: str
+    max_results: int = 10
 
-def calculate_seo_score(topic: str, keywords: List[str]) -> int:
-    suggestions = get_google_autocomplete_suggestions(topic)
-    matched = 0
-    for kw in keywords:
-        if any(kw.lower() in s.lower() or s.lower() in kw.lower() for s in suggestions):
-            matched += 1
-    score = int((matched / max(len(keywords), 1)) * 100)
-    return score
-
-def calculate_trending_score(topic: str) -> int:
-    suggestions = get_google_autocomplete_suggestions(topic)
-    words = topic.lower().split()
-    count = 0
-    for sug in suggestions:
-        if any(word in sug.lower() for word in words):
-            count += 1
-    score = int((count / max(len(suggestions), 1)) * 100)
-    return score
-
-def get_related_keywords(topic: str, input_keywords: List[str], max_results=10) -> List[str]:
-    suggestions = get_google_autocomplete_suggestions(topic, max_results=max_results)
-    combined = list(dict.fromkeys(suggestions + input_keywords))  # unique, preserve order
-    return combined[:max_results]
-
-def suggest_text_improvements(topic: str, keywords: List[str]) -> str:
-    suggestions = []
-    topic_words = topic.lower().split()
-    keywords_lower = [k.lower() for k in keywords]
-    if not any(topic_words[0] in kw for kw in keywords_lower):
-        suggestions.append(f"Add keywords including main topic word '{topic_words[0]}'")
-    if any(len(k.split()) > 4 for k in keywords):
-        suggestions.append("Avoid very long keywords; keep keywords concise (max 4 words)")
-    if not keywords:
-        suggestions.append("Add relevant keywords related to your topic")
-    if not suggestions:
-        return "Keywords and topic look good."
-    return "Suggestions: " + "; ".join(suggestions)
-
-@app.post("/analyze")
-async def analyze(data: AnalyzeRequest):
-    seo_score = calculate_seo_score(data.topic, data.keywords)
-    trending_score = calculate_trending_score(data.topic)
-    related_keywords = get_related_keywords(data.topic, data.keywords)
-    improvement_text = suggest_text_improvements(data.topic, data.keywords)
-    trending_texts = get_google_autocomplete_suggestions(data.topic, max_results=10)
-
-    return {
-        "seo_score": seo_score,
-        "trending_score": trending_score,
-        "related_keywords": related_keywords,
-        "top_10_trending_texts": trending_texts,
-        "suggestion_text": improvement_text
-    }
-
-# Outer function to get Google autocomplete suggestions
+# Outer function to get Google autocomplete suggestions using SerpApi
 def get_google_autocomplete_suggestions(topic: str, max_results: int = 10) -> List[str]:
     """Fetch Google autocomplete suggestions using SerpApi."""
     try:
@@ -93,7 +40,74 @@ def get_google_autocomplete_suggestions(topic: str, max_results: int = 10) -> Li
         logger.error(f"Error fetching autocomplete suggestions: {str(e)}")
         return [f"Error: {str(e)}"]
 
-# New /serpapi endpoint
+# Outer function to calculate SEO score
+def calculate_seo_score(topic: str, keywords: List[str]) -> int:
+    """Calculate SEO score based on topic and keyword relevance in autocomplete suggestions."""
+    try:
+        suggestions = get_google_autocomplete_suggestions(topic)
+        matched = 0
+        for kw in keywords:
+            if any(kw.lower() in s.lower() or s.lower() in kw.lower() for s in suggestions if s != "No suggestions found"):
+                matched += 1
+        score = int((matched / max(len(keywords), 1)) * 100)
+        logger.info(f"SEO score for topic '{topic}': {score}")
+        return score
+    except Exception as e:
+        logger.error(f"Error calculating SEO score: {str(e)}")
+        return 0
+
+# Outer function to calculate trending score
+def calculate_trending_score(topic: str) -> int:
+    """Calculate trending score based on topic word matches in autocomplete suggestions."""
+    try:
+        suggestions = get_google_autocomplete_suggestions(topic)
+        words = topic.lower().split()
+        count = 0
+        for sug in suggestions:
+            if sug != "No suggestions found" and any(word in sug.lower() for word in words):
+                count += 1
+        score = int((count / max(len(suggestions), 1)) * 100)
+        logger.info(f"Trending score for topic '{topic}': {score}")
+        return score
+    except Exception as e:
+        logger.error(f"Error calculating trending score: {str(e)}")
+        return 0
+
+# Outer function to get related keywords
+def get_related_keywords(topic: str, input_keywords: List[str], max_results: int = 10) -> List[str]:
+    """Fetch related keywords combining autocomplete suggestions and input keywords."""
+    try:
+        suggestions = get_google_autocomplete_suggestions(topic, max_results)
+        combined = list(dict.fromkeys(suggestions + input_keywords))  # Unique, preserve order
+        logger.info(f"Related keywords for topic '{topic}': {combined[:max_results]}")
+        return combined[:max_results]
+    except Exception as e:
+        logger.error(f"Error fetching related keywords: {str(e)}")
+        return input_keywords[:max_results]
+
+# Outer function to suggest text improvements
+def suggest_text_improvements(topic: str, keywords: List[str]) -> str:
+    """Generate text improvement suggestions based on topic and keywords."""
+    try:
+        suggestions = []
+        topic_words = topic.lower().split()
+        keywords_lower = [k.lower() for k in keywords]
+        if not any(topic_words[0] in kw for kw in keywords_lower):
+            suggestions.append(f"Add keywords including main topic word '{topic_words[0]}'")
+        if any(len(k.split()) > 4 for k in keywords):
+            suggestions.append("Avoid very long keywords; keep keywords concise (max 4 words)")
+        if not keywords:
+            suggestions.append("Add relevant keywords related to your topic")
+        if not suggestions:
+            return "Keywords and topic look good."
+        suggestion_text = "Suggestions: " + "; ".join(suggestions)
+        logger.info(f"Text improvement suggestions for topic '{topic}': {suggestion_text}")
+        return suggestion_text
+    except Exception as e:
+        logger.error(f"Error generating text improvements: {str(e)}")
+        return "Unable to generate suggestions due to an error."
+
+# /serpapi endpoint
 @app.post("/serpapi")
 async def serpapi_endpoint(data: SerpapiRequest):
     """Fetch Google autocomplete suggestions for a given topic."""
@@ -103,9 +117,34 @@ async def serpapi_endpoint(data: SerpapiRequest):
     except Exception as e:
         logger.error(f"Error in /serpapi endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+
+# /analyze endpoint
+@app.post("/analyze")
+async def analyze(data: AnalyzeRequest):
+    """Analyze SEO and trending data for a given topic and keywords."""
+    try:
+        seo_score = calculate_seo_score(data.topic, data.keywords)
+        trending_score = calculate_trending_score(data.topic)
+        related_keywords = get_related_keywords(data.topic, data.keywords)
+        improvement_text = suggest_text_improvements(data.topic, data.keywords)
+        trending_texts = get_google_autocomplete_suggestions(data.topic, max_results=10)
+
+        return {
+            "seo_score": seo_score,
+            "trending_score": trending_score,
+            "related_keywords": related_keywords,
+            "top_10_trending_texts": trending_texts,
+            "suggestion_text": improvement_text
+        }
+    except Exception as e:
+        logger.error(f"Error in /analyze endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+
+# Root endpoint
 @app.get("/")
 async def root():
-    return {"message": "Seo analyzation API works!"}
+    """Root endpoint to check API status."""
+    return {"message": "SEO Analyzation API is running!"}
 
 if __name__ == "__main__":
     import uvicorn
