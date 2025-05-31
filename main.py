@@ -75,6 +75,34 @@ async def analyze(data: AnalyzeRequest):
         "suggestion_text": improvement_text
     }
 
+# Outer function to get Google autocomplete suggestions
+def get_google_autocomplete_suggestions(topic: str, max_results: int = 10) -> List[str]:
+    """Fetch Google autocomplete suggestions using SerpApi."""
+    try:
+        client = serpapi.Client(api_key="21895f39a905a49085b25837bebd79b950331c60d1f46e56c7dcf7d2270c933a")
+        results = client.search({
+            "q": topic,
+            "engine": "google_autocomplete",
+            "hl": "en",
+            "gl": "us"
+        })
+        suggestions = [item["value"] for item in results.get("suggestions", [])][:max_results]
+        logger.info(f"Autocomplete suggestions for topic '{topic}': {suggestions}")
+        return suggestions if suggestions else ["No suggestions found"]
+    except Exception as e:
+        logger.error(f"Error fetching autocomplete suggestions: {str(e)}")
+        return [f"Error: {str(e)}"]
+
+# New /serpapi endpoint
+@app.post("/serpapi")
+async def serpapi_endpoint(data: SerpapiRequest):
+    """Fetch Google autocomplete suggestions for a given topic."""
+    try:
+        suggestions = get_google_autocomplete_suggestions(data.topic, data.max_results)
+        return {"topic": data.topic, "suggestions": suggestions}
+    except Exception as e:
+        logger.error(f"Error in /serpapi endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
 @app.get("/")
 async def root():
     return {"message": "Seo analyzation API works!"}
