@@ -19,8 +19,7 @@ class AnalyzeRequest(BaseModel):
 
 # Pydantic model for /serpapi endpoint
 class SerpapiRequest(BaseModel):
-    topic: str
-    max_results: int = 10
+    query: str
 
 # Outer function to get Google autocomplete suggestions using SerpApi
 def get_google_autocomplete_suggestions(topic: str, max_results: int = 10) -> List[str]:
@@ -107,13 +106,24 @@ def suggest_text_improvements(topic: str, keywords: List[str]) -> str:
         logger.error(f"Error generating text improvements: {str(e)}")
         return "Unable to generate suggestions due to an error."
 
+
+
 # /serpapi endpoint
 @app.post("/serpapi")
 async def serpapi_endpoint(data: SerpapiRequest):
-    """Fetch Google autocomplete suggestions for a given topic."""
+    """Fetch Google search organic results for a given query using SerpApi."""
     try:
-        suggestions = get_google_autocomplete_suggestions(data.topic, data.max_results)
-        return {"topic": data.topic, "suggestions": suggestions}
+        client = serpapi.Client(api_key="21895f39a905a49085b25837bebd79b950331c60d1f46e56c7dcf7d2270c933a")
+        results = client.search({
+            "q": data.query,
+            "engine": "google",
+            "location": "Austin, Texas",
+            "hl": "en",
+            "gl": "us"
+        })
+        organic_results = results.get("organic_results", [])
+        logger.info(f"Google search results for query '{data.query}': {len(organic_results)} results")
+        return {"query": data.query, "organic_results": organic_results}
     except Exception as e:
         logger.error(f"Error in /serpapi endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
